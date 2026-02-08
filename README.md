@@ -1,5 +1,10 @@
 # Baseline Integrity
 
+## Design stance
+
+Baseline Integrity is intentionally conservative in scope.
+It prioritizes competitive fairness and user privacy over invasive or opaque enforcement techniques.
+
 **Privacy-first competitive integrity** through **server authority**, **behavioral baselines**, and **cryptographic trust**.
 
 Baseline Integrity is a cross-platform integrity platform designed to reduce cheat advantage and raise the cost of cheating **without invasive client control**. It treats trust as evidence-based and tiered: anyone can play, and players can optionally opt into stronger verification for ranked/tournament environments.
