@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package baselineintegrity.v1;
+
+option go_package = "github.com/BlindedGlory/baseline-integrity/gen/go/baselineintegrity/v1;baselineintegrityv1";
+
+// v1 companion messages currently live in trust.proto alongside TrustService.
+// This file is reserved for future companion-specific expansions without breaking imports.
