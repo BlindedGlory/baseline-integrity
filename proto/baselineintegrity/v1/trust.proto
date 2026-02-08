@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package baselineintegrity.v1;
+
+option go_package = "github.com/BlindedGlory/baseline-integrity/gen/go/baselineintegrity/v1;baselineintegrityv1";
+
+import "google/protobuf/timestamp.proto";
+import "baselineintegrity/v1/common.proto";
+
+service TrustService {
+  // Called by GAME SERVER to start a player session within a match.
+  rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
+
+  // Called by COMPANION to exchange attestation bundle for a Verified tier token.
+  rpc SubmitAttestation(SubmitAttestationRequest) returns (SubmitAttestationResponse);
+
+  // Game servers/matchmakers cache public keys to validate tokens offline.
+  rpc GetPublicKeys(GetPublicKeysRequest) returns (GetPublicKeysResponse);
+
+  // Optional online validation endpoint.
+  rpc IntrospectTierToken(IntrospectTierTokenRequest) returns (IntrospectTierTokenResponse);
+}
+
+message StartSessionRequest {
+  SessionRef ref = 1;
+  string game_build_id = 2;      // studio-defined build hash/version
+  TrustTier requested_tier = 3;  // OPEN or VERIFIED
+  PlatformOS platform_os = 4;
+  VersionInfo sdk = 5;
+}
+
+message Policy {
+  // Public policy: what data is expected/allowed. No thresholds, no weights.
+  TrustTier max_tier_supported = 1;
+
+  // Telemetry schema version expected for this match/build.
+  string telemetry_schema_id = 2;
+
+  // If true, VERIFIED tier requires a valid companion token bound to session_id + nonce.
+  bool verified_requires_companion = 3;
+
+  // Optional allowlist for hashing (keep empty in v1 unless you explicitly implement hashing).
+  repeated string allowlisted_game_paths = 4;
+}
+
+message StartSessionResponse {
+  SessionRef ref = 1;
+  Nonce nonce = 2;
+  Policy policy = 3;
+
+  // Server-signed OPEN tier token (always issued).
+  TierToken open_tier_token = 4;
+
+  // If requested_tier == VERIFIED, indicates whether Verified is possible on this platform/build.
+  bool verified_available = 5;
+  google.protobuf.Timestamp expires_at = 6;
+}
+
+message TierToken {
+  SessionRef ref = 1;
+  TrustTier tier = 2;
+  bytes nonce_hash = 3; // hash(nonce.value)
+  google.protobuf.Timestamp issued_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+
+  // Token signature by Trust API (server key rotation supported via key_id).
+  SignedEnvelope signature = 100;
+}
+
+message GetPublicKeysRequest {
+  string purpose = 1; // e.g. "tier_tokens"
+}
+
+message GetPublicKeysResponse {
+  repeated PublicKey keys = 1;
+  google.protobuf.Timestamp cache_until = 2;
+}
+
+message IntrospectTierTokenRequest {
+  TierToken token = 1;
+}
+
+message IntrospectTierTokenResponse {
+  bool valid = 1;
+  string reason = 2; // non-sensitive reason codes
+  TrustTier tier = 3;
+  SessionRef ref = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+// Companion submission message types are defined here to keep TrustService cohesive.
+message SubmitAttestationRequest {
+  SessionRef ref = 1;
+  Nonce nonce = 2;
+  PlatformOS platform_os = 3;
+  VersionInfo companion = 4;
+
+  // Per-install companion key (rotatable). Avoid stable device IDs.
+  PublicKey companion_pubkey = 5;
+
+  // Claims-based attestation bundle (privacy-first).
+  AttestationBundle bundle = 6;
+
+  // Companion signs request payload (domain-separated).
+  SignedEnvelope request_signature = 7;
+}
+
+message SubmitAttestationResponse {
+  bool accepted = 1;
+  string reason = 2;         // non-sensitive reason codes
+  TierToken verified_token = 3; // present when accepted and Verified is granted
+}
+
+message AttestationBundle {
+  // Claims & cryptographic proofs only. No process lists, no raw logs.
+  bool secure_boot_claimed = 1;
+  bool tpm_present_claimed = 2;
+
+  TpmQuote tpm_quote = 10;
+  ImaClaim ima_claim = 20;
+}
+
+message TpmQuote {
+  // Minimal TPM quote packet; server verifies signature and nonce binding.
+  bytes quoted = 1;
+  bytes signature = 2;
+  bytes pcr_selection = 3;
+  bytes pcr_digest = 4;
+  bytes attestation_key_pub = 5;
+  bytes nonce = 6; // must equal SubmitAttestationRequest.nonce.value
+}
+
+message ImaClaim {
+  // Claims-based in v1: digest summary, not the full log.
+  bool enabled_claimed = 1;
+  string policy_id = 2;
+  bytes measurement_digest = 3;
+  google.protobuf.Timestamp observed_at = 4;
+}
