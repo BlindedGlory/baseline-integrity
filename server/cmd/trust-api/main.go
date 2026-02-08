@@ -20,8 +20,13 @@ func main() {
 		log.Fatalf("failed to listen on %s: %v", *listenAddr, err)
 	}
 
+	srv, err := trust.NewServer()
+	if err != nil {
+		log.Fatalf("failed to init trust server: %v", err)
+	}
+
 	s := grpc.NewServer()
-	baselineintegrityv1.RegisterTrustServiceServer(s, &trust.Server{})
+	baselineintegrityv1.RegisterTrustServiceServer(s, srv)
 	reflection.Register(s)
 
 	log.Printf("baselineintegrity-trust-api listening on %s", *listenAddr)
