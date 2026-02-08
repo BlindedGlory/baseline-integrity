@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package baselineintegrity.v1;
+
+option go_package = "github.com/BlindedGlory/baseline-integrity/gen/go/baselineintegrity/v1;baselineintegrityv1";
+
+import "google/protobuf/timestamp.proto";
+
+enum PlatformOS {
+  PLATFORM_OS_UNSPECIFIED = 0;
+  PLATFORM_OS_WINDOWS = 1;
+  PLATFORM_OS_LINUX = 2;
+  PLATFORM_OS_MACOS = 3;
+  PLATFORM_OS_CONSOLE = 4;
+  PLATFORM_OS_MOBILE = 5;
+}
+
+enum TrustTier {
+  TRUST_TIER_UNSPECIFIED = 0;
+  TRUST_TIER_OPEN = 1;
+  TRUST_TIER_VERIFIED = 2;
+  TRUST_TIER_TOURNAMENT = 3;
+}
+
+message VersionInfo {
+  string product = 1;  // "sdk-unity", "sdk-unreal", "companion", "server"
+  string version = 2;  // semver
+  string build_id = 3; // reproducible build identifier if available
+}
+
+message SessionRef {
+  string session_id = 1; // opaque uuid/ulid
+  string match_id = 2;   // game-defined unique match identifier
+  string player_id = 3;  // account id (never a device id)
+}
+
+message Nonce {
+  bytes value = 1; // 32 bytes recommended
+}
+
+message SignedEnvelope {
+  // Serialized protobuf of an expected message type; signed with Ed25519.
+  string key_id = 1;
+  bytes payload = 2;
+  bytes signature = 3;
+  google.protobuf.Timestamp signed_at = 4;
+}
+
+message PublicKey {
+  string key_id = 1;
+  bytes ed25519 = 2; // 32 bytes
+}
