@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 )
 
 func NewNonce32() ([]byte, error) {
@@ -37,6 +38,15 @@ func NewEphemeralSigner(keyID string) (*Signer, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
+	}
+	return &Signer{KeyID: keyID, Priv: priv, Pub: pub}, nil
+}
+
+// NewDiskSigner loads or creates a persisted Ed25519 signing key at keyPath.
+func NewDiskSigner(keyPath string) (*Signer, error) {
+	keyID, priv, pub, err := (DiskKeyStore{Path: keyPath}).LoadOrCreateEd25519()
+	if err != nil {
+		return nil, fmt.Errorf("load/create signing key: %w", err)
 	}
 	return &Signer{KeyID: keyID, Priv: priv, Pub: pub}, nil
 }

@@ -30,3 +30,14 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# local dev keys / runtime data
+.baselineintegrity/
+
+# local built binaries (if any)
+trust-api
+telemetry-api
+
+# generated code (not committed)
+gen/
+t-api
