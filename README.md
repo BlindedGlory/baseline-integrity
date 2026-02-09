@@ -39,6 +39,44 @@ Baseline Integrity is a cross-platform integrity platform designed to reduce che
 - `sdk/` — Unity/Unreal/C-ABI SDKs (thin integration layers)
 - `docs/` — threat model, privacy spec, telemetry feature dictionary
 
+## Offline TierToken Verification (Game Servers)
+
+Baseline Integrity is designed so **game servers do not need to call the Trust API on every request**.
+Instead, servers can **verify TierTokens offline** using cached public keys.
+
+This reduces latency, avoids centralized enforcement, and keeps trust **cryptographic and auditable**.
+
+### Overview
+
+1. Game server periodically fetches public signing keys from the Trust API
+2. Keys are cached using `cache_until`
+3. Incoming TierTokens are verified locally:
+   - canonical payload
+   - wrapper ↔ payload binding
+   - expiration
+   - Ed25519 signature
+
+No kernel hooks. No device fingerprinting. No spyware.
+
+---
+
+### Fetch and cache public keys
+
+```go
+// Call TrustService.GetPublicKeys periodically (e.g. on boot and before cache expiration).
+resp, err := trustClient.GetPublicKeys(ctx, &baselineintegrityv1.GetPublicKeysRequest{
+	Purpose: "tier_tokens",
+})
+if err != nil {
+	log.Fatalf("fetch public keys: %v", err)
+}
+
+keys := make(verify.PublicKeySet)
+for _, k := range resp.Keys {
+	keys[k.KeyId] = k.Ed25519 // 32-byte Ed25519 public key
+}
+
+
 ## Getting started
 ### Prerequisites
 - `buf` installed
