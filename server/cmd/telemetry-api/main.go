@@ -20,8 +20,14 @@ func main() {
 		log.Fatalf("failed to listen on %s: %v", *listenAddr, err)
 	}
 
+	// ✅ Construct telemetry server properly (sets sinkDir)
+	srv, err := telemetry.NewServer()
+	if err != nil {
+		log.Fatalf("failed to init telemetry server: %v", err)
+	}
+
 	s := grpc.NewServer()
-	baselineintegrityv1.RegisterTelemetryServiceServer(s, &telemetry.Server{})
+	baselineintegrityv1.RegisterTelemetryServiceServer(s, srv)
 	reflection.Register(s)
 
 	log.Printf("baselineintegrity-telemetry-api listening on %s", *listenAddr)
