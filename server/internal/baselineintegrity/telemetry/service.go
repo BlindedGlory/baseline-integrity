@@ -1,36 +1,55 @@
 package telemetry
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	baselineintegrityv1 "github.com/BlindedGlory/baseline-integrity/gen/go/baselineintegrity/v1"
+	bicrypto "github.com/BlindedGlory/baseline-integrity/server/internal/baselineintegrity/crypto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 const expectedTelemetrySchemaID = "baselineintegrity.telemetry.v1"
 
 type Server struct {
 	baselineintegrityv1.UnimplementedTelemetryServiceServer
-	sinkDir string
+
+	sinkDir     string
+	requireSig  bool
+	allowedKeys map[string][]byte // key_id -> ed25519 pubkey (32 bytes)
 }
 
 func NewServer() (*Server, error) {
 	dir := os.Getenv("BASELINEINTEGRITY_TELEMETRY_DIR")
 	if dir == "" {
-		// Keep dev data under the same local folder you already use for trust keys.
+		// Dev default.
 		dir = "./.baselineintegrity/telemetry"
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir telemetry sink: %w", err)
 	}
-	return &Server{sinkDir: dir}, nil
+
+	requireSig := os.Getenv("BASELINEINTEGRITY_REQUIRE_TELEMETRY_SERVER_SIG") == "1"
+	allowed, err := parseAllowedServerKeys(os.Getenv("BASELINEINTEGRITY_TELEMETRY_SERVER_PUBKEYS"))
+	if err != nil {
+		return nil, fmt.Errorf("parse telemetry server pubkeys: %w", err)
+	}
+
+	return &Server{
+		sinkDir:     dir,
+		requireSig:  requireSig,
+		allowedKeys: allowed,
+	}, nil
 }
 
 func (s *Server) SubmitMatchAggregates(ctx context.Context, req *baselineintegrityv1.SubmitMatchAggregatesRequest) (*baselineintegrityv1.SubmitMatchAggregatesResponse, error) {
@@ -49,6 +68,32 @@ func (s *Server) SubmitMatchAggregates(ctx context.Context, req *baselineintegri
 		return &baselineintegrityv1.SubmitMatchAggregatesResponse{Accepted: false, Reason: "missing_players"}, nil
 	}
 
+	// Optional signature enforcement (deployment decides auth).
+	if s.requireSig {
+		if req.ServerSignature == nil || len(req.ServerSignature.Payload) == 0 || len(req.ServerSignature.Signature) == 0 {
+			return &baselineintegrityv1.SubmitMatchAggregatesResponse{Accepted: false, Reason: "missing_server_signature"}, nil
+		}
+		pub := s.allowedKeys[req.ServerSignature.KeyId]
+		if len(pub) == 0 {
+			return &baselineintegrityv1.SubmitMatchAggregatesResponse{Accepted: false, Reason: "unknown_server_key_id"}, nil
+		}
+
+		// Canonical payload = request without server_signature.
+		unsigned := proto.Clone(req).(*baselineintegrityv1.SubmitMatchAggregatesRequest)
+		unsigned.ServerSignature = nil
+
+		canonical, err := proto.Marshal(unsigned)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "marshal unsigned telemetry: %v", err)
+		}
+		if !bytes.Equal(canonical, req.ServerSignature.Payload) {
+			return &baselineintegrityv1.SubmitMatchAggregatesResponse{Accepted: false, Reason: "server_signature_payload_mismatch"}, nil
+		}
+		if !bicrypto.Verify(pub, req.ServerSignature.Payload, req.ServerSignature.Signature) {
+			return &baselineintegrityv1.SubmitMatchAggregatesResponse{Accepted: false, Reason: "bad_server_signature"}, nil
+		}
+	}
+
 	// v1: enforce schema guardrail per player.
 	for i, p := range req.Players {
 		if p == nil {
@@ -63,7 +108,6 @@ func (s *Server) SubmitMatchAggregates(ctx context.Context, req *baselineintegri
 		if p.TelemetrySchemaId != expectedTelemetrySchemaID {
 			return &baselineintegrityv1.SubmitMatchAggregatesResponse{Accepted: false, Reason: "schema_id_mismatch"}, nil
 		}
-		// Optional basic shape checks (kept light in v1)
 		for _, h := range p.Histograms {
 			if h == nil {
 				continue
@@ -93,7 +137,6 @@ func (s *Server) SubmitMatchAggregates(ctx context.Context, req *baselineintegri
 	}
 	defer f.Close()
 
-	// Tiny timestamp prefix makes tail/grep easier, still JSONL-friendly.
 	prefix := []byte(time.Now().UTC().Format(time.RFC3339Nano) + " ")
 	if _, err := f.Write(prefix); err != nil {
 		return nil, status.Errorf(codes.Internal, "write telemetry sink: %v", err)
@@ -103,6 +146,37 @@ func (s *Server) SubmitMatchAggregates(ctx context.Context, req *baselineintegri
 	}
 
 	return &baselineintegrityv1.SubmitMatchAggregatesResponse{Accepted: true, Reason: "ok"}, nil
+}
+
+func parseAllowedServerKeys(s string) (map[string][]byte, error) {
+	m := map[string][]byte{}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return m, nil
+	}
+	parts := strings.Split(s, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		kv := strings.SplitN(p, ":", 2)
+		if len(kv) != 2 {
+			return nil, fmt.Errorf("bad key entry %q (want keyId:base64pub)", p)
+		}
+		keyID := strings.TrimSpace(kv[0])
+		b64 := strings.TrimSpace(kv[1])
+
+		pub, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return nil, fmt.Errorf("decode pubkey for %q: %w", keyID, err)
+		}
+		if len(pub) != 32 {
+			return nil, fmt.Errorf("pubkey for %q wrong length: got %d want 32", keyID, len(pub))
+		}
+		m[keyID] = pub
+	}
+	return m, nil
 }
 
 var nonSafe = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
