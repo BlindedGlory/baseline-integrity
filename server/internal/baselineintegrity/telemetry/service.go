@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 
 	baselineintegrityv1 "github.com/BlindedGlory/baseline-integrity/gen/go/baselineintegrity/v1"
 	bicrypto "github.com/BlindedGlory/baseline-integrity/server/internal/baselineintegrity/crypto"
+	bioutbox "github.com/BlindedGlory/baseline-integrity/server/internal/baselineintegrity/outbox"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -117,9 +119,8 @@ func (s *Server) SubmitMatchAggregates(ctx context.Context, req *baselineintegri
 			}
 		}
 	}
-
 	// Dev-safe disk sink: append JSON line per request.
-	safeMatch := sanitize(req.MatchId)
+	safeMatch := sanitize(req.GetMatchId())
 	path := filepath.Join(s.sinkDir, "match_"+safeMatch+".jsonl")
 
 	b, err := protojson.MarshalOptions{
@@ -145,9 +146,43 @@ func (s *Server) SubmitMatchAggregates(ctx context.Context, req *baselineintegri
 		return nil, status.Errorf(codes.Internal, "write telemetry sink: %v", err)
 	}
 
+	// Match-finalized push (filesystem outbox).
+	// Today: SubmitMatchAggregates is typically called once at match end.
+	// Later: when chunked telemetry exists, set BASELINEINTEGRITY_OUTBOX_ON_FINALIZE_ONLY=1
+	// and enqueue only when the request represents a true finalize moment.
+	outboxDir := os.Getenv("BASELINEINTEGRITY_OUTBOX_DIR")
+	if outboxDir == "" {
+		outboxDir = "./.baselineintegrity/outbox"
+	}
+
+	enqueueFinalizeOnly := os.Getenv("BASELINEINTEGRITY_OUTBOX_ON_FINALIZE_ONLY") == "1"
+	isFinalized := !enqueueFinalizeOnly // default: treat every submit as final for now
+
+	// Placeholder finalize signal until the proto grows a real "finalized" flag/RPC.
+	// When you add a proto field, set: isFinalized = req.GetFinalized()
+	if isFinalized {
+		ob := bioutbox.FSOutbox{Dir: outboxDir}
+
+	instance := os.Getenv("BASELINEINTEGRITY_SERVER_INSTANCE_ID")
+	if instance == "" {
+	instance = "dev"
+	}
+
+	ev := bioutbox.Event{
+	    ID:        bioutbox.NewEventID(instance, req.GetMatchId()),
+	    Type:      bioutbox.EventMatchFinalized,
+	    MatchID:   req.GetMatchId(),
+	    CreatedAt: time.Now().UTC(), // finalize moment (grace window uses this)
+	}
+
+		if err := ob.Enqueue(ev); err != nil {
+			// Do not fail ingestion; telemetry is already persisted.
+			log.Printf("outbox enqueue failed: %v", err)
+		}
+	}
+
 	return &baselineintegrityv1.SubmitMatchAggregatesResponse{Accepted: true, Reason: "ok"}, nil
 }
-
 func parseAllowedServerKeys(s string) (map[string][]byte, error) {
 	m := map[string][]byte{}
 	s = strings.TrimSpace(s)
